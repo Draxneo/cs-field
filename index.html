@@ -61,7 +61,8 @@ const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<
 // in-memory capture state
 const cap = {
   outdoor:{model:"",serial:"",photo:""}, indoor:{model:"",serial:"",photo:""}, furnace:{model:"",serial:"",photo:""},
-  system_age:"", operational:null, hp_type:null, extra_photos:[]
+  new_outdoor:{model:"",serial:"",photo:""}, new_indoor:{model:"",serial:"",photo:""}, new_furnace:{model:"",serial:"",photo:""},
+  pickup_photos:[], system_age:"", operational:null, hp_type:null, extra_photos:[]
 };
 
 async function api(body){
@@ -83,12 +84,12 @@ function fileToScaledDataUrl(file){
   });
 }
 
-function plateCard(slot, title, icon){
+function plateCard(slot, title, icon, hint){
   const c = cap[slot];
   const done = c.model && c.serial;
   return `<div class="card" id="card-${slot}">
     <h2>${icon} ${title} <span class="pill ${done?'ok':'todo'}" id="pill-${slot}">${done?'✓ read':'needs photo'}</span></h2>
-    <div class="hint">Snap the metal data plate on the OLD ${title.toLowerCase()}.</div>
+    <div class="hint">${hint||("Snap the data plate on the "+title.toLowerCase()+".")}</div>
     <label class="ph" for="file-${slot}" id="ph-${slot}">${c.photo?`<img src="${esc(c.photo)}"/>`:`<div class="ic">📷</div><div>Take photo</div>`}</label>
     <input type="file" id="file-${slot}" accept="image/*" capture="environment"/>
     <div id="fields-${slot}" style="${done||c.photo?'':'display:none'}">
@@ -109,9 +110,21 @@ function render(job){
       <div style="font-weight:700">Snap the OLD units before you pull them.</div>
       <div class="hint">We read the model &amp; serial for you — just check it's right. Complete capture = <b>$100 bonus</b>.</div>
     </div>
-    ${plateCard("outdoor","Condenser (outdoor)","🌀")}
-    ${plateCard("indoor","Coil (indoor)","❄️")}
-    ${plateCard("furnace","Furnace / Air handler","🔥")}
+    <div class="card" style="background:rgba(251,191,36,.07)"><div style="font-weight:700">① OLD system (coming out)</div><div class="hint">For the Early Replacement rebate — snap the data plate on each OLD unit before you pull it.</div></div>
+    ${plateCard("outdoor","Old condenser","🌀","Snap the data plate on the OLD condenser.")}
+    ${plateCard("indoor","Old coil","❄️","Snap the data plate on the OLD coil.")}
+    ${plateCard("furnace","Old furnace / air handler","🔥","Snap the data plate on the OLD furnace.")}
+    <div class="card" style="background:rgba(91,140,255,.08)"><div style="font-weight:700">② NEW system (going in)</div><div class="hint">Pickup ticket + the model/serial on each NEW box — feeds the warranty registration & rebate.</div></div>
+    <div class="card">
+      <h2>🧾 Pickup ticket</h2>
+      <div class="hint">Snap the supply-house pickup ticket (and any extra tickets).</div>
+      <label class="ph" for="file-pickup" style="height:120px"><div class="ic">📷</div><div>Add pickup ticket</div></label>
+      <input type="file" id="file-pickup" accept="image/*" capture="environment"/>
+      <div class="extra-grid" id="pickup-grid"></div>
+    </div>
+    ${plateCard("new_outdoor","New condenser","🌀","Snap the model/serial sticker on the NEW condenser box.")}
+    ${plateCard("new_indoor","New coil","❄️","Snap the model/serial on the NEW coil box.")}
+    ${plateCard("new_furnace","New furnace / air handler","🔥","Snap the model/serial on the NEW furnace box.")}
     <div class="card">
       <h2>📋 System details</h2>
       <label class="fld">Approx. age of old system (years)</label>
@@ -140,8 +153,9 @@ function render(job){
     <button class="btn" id="submit">Submit capture</button>
   </div></footer>`;
 
-  ["outdoor","indoor","furnace"].forEach(wirePlate);
+  ["outdoor","indoor","furnace","new_outdoor","new_indoor","new_furnace"].forEach(wirePlate);
   $("file-extra").addEventListener("change", onExtra);
+  $("file-pickup").addEventListener("change", onPickup);
   $("age").addEventListener("input", e => cap.system_age = e.target.value);
   $("seg-op").querySelectorAll("[data-op]").forEach(b => b.onclick = () => { cap.operational = b.dataset.op==="yes"; paintSeg("seg-op","op", b.dataset.op); updateHint(); });
   $("seg-hp").querySelectorAll("[data-hp]").forEach(b => b.onclick = () => { cap.hp_type = b.dataset.hp==="none"?null:b.dataset.hp; paintSeg("seg-hp","hp", b.dataset.hp); });
@@ -178,6 +192,13 @@ async function onExtra(e){
   if(res && res.ok && res.photo_url){ cap.extra_photos.push(res.photo_url); const g=$("extra-grid"); const im=document.createElement("img"); im.src=res.photo_url; g.appendChild(im); }
   e.target.value="";
 }
+async function onPickup(e){
+  const f = e.target.files && e.target.files[0]; if(!f) return;
+  let dataUrl; try{ dataUrl = await fileToScaledDataUrl(f); }catch(_){ return; }
+  const res = await api({ action:"read", ...auth(), image_b64:dataUrl, slot:"pickup" });
+  if(res && res.ok && res.photo_url){ cap.pickup_photos.push(res.photo_url); const g=$("pickup-grid"); const im=document.createElement("img"); im.src=res.photo_url; g.appendChild(im); }
+  e.target.value="";
+}
 
 function missing(){
   const m=[]; ["outdoor","indoor","furnace"].forEach(s=>{ if(!(cap[s].model&&cap[s].serial)) m.push(s==="outdoor"?"condenser":s==="indoor"?"coil":"furnace"); });
@@ -193,6 +214,7 @@ async function submit(){
   const btn=$("submit"); btn.disabled=true; btn.textContent="Submitting…";
   const res = await api({ action:"submit", ...auth(),
     outdoor:cap.outdoor, indoor:cap.indoor, furnace:cap.furnace,
+    new_outdoor:cap.new_outdoor, new_indoor:cap.new_indoor, new_furnace:cap.new_furnace, pickup_photos:cap.pickup_photos,
     system_age:cap.system_age, operational:cap.operational, hp_type:cap.hp_type, extra_photos:cap.extra_photos });
   if(!res || !res.ok){ btn.disabled=false; btn.textContent="Submit capture"; alert("Submit failed — check signal and try again."); return; }
   $("app").innerHTML = `<div class="center">
@@ -215,9 +237,14 @@ async function submit(){
   cap.outdoor = {model:c.old_outdoor_model||"",serial:c.old_outdoor_serial||"",photo:c.old_outdoor_photo||""};
   cap.indoor  = {model:c.old_indoor_model||"", serial:c.old_indoor_serial||"", photo:c.old_indoor_photo||""};
   cap.furnace = {model:c.old_furnace_model||"",serial:c.old_furnace_serial||"",photo:c.old_furnace_photo||""};
+  cap.new_outdoor = {model:c.new_outdoor_model||"",serial:c.new_outdoor_serial||"",photo:c.new_outdoor_photo||""};
+  cap.new_indoor  = {model:c.new_indoor_model||"", serial:c.new_indoor_serial||"", photo:c.new_indoor_photo||""};
+  cap.new_furnace = {model:c.new_furnace_model||"",serial:c.new_furnace_serial||"",photo:c.new_furnace_photo||""};
+  cap.pickup_photos = Array.isArray(c.pickup_photos)?c.pickup_photos:[];
   cap.system_age = c.system_age||""; cap.operational = (typeof c.operational==="boolean")?c.operational:null;
   cap.hp_type = c.hp_type||null; cap.extra_photos = Array.isArray(c.extra_photos)?c.extra_photos:[];
   render(c);
+  (cap.pickup_photos||[]).forEach(u=>{ const g=$("pickup-grid"); if(g){ const im=document.createElement("img"); im.src=u; g.appendChild(im); } });
   if(cap.operational!==null) paintSeg("seg-op","op",cap.operational?"yes":"no");
   if(cap.hp_type) paintSeg("seg-hp","hp",cap.hp_type);
   (cap.extra_photos||[]).forEach(u=>{ const im=document.createElement("img"); im.src=u; $("extra-grid").appendChild(im); });
