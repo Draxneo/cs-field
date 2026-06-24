@@ -45,7 +45,16 @@
 
 <script>
 const BASE = "https://bqsjbwwkjhrthqxgybht.supabase.co/functions/v1/field-capture";
-const TOKEN = new URLSearchParams(location.search).get("t") || "";
+// TWO entry modes:
+//   SMS link:  ?t=<link_token>          (texted to the tech; no login)
+//   In-app:    ?job=<hcp_job_id>        (opened from cs-installer; uses the saved staff login in localStorage)
+const _params = new URLSearchParams(location.search);
+const LINK_TOKEN = _params.get("t") || "";
+const JOB = _params.get("job") || "";
+const STAFF_MODE = !!JOB;
+const STAFF_TOKEN = STAFF_MODE ? (localStorage.getItem("cs_token") || "") : "";
+const TOKEN = LINK_TOKEN;   // back-compat for the "missing link" check
+function auth() { return STAFF_MODE ? { token: STAFF_TOKEN, hcp_job_id: JOB } : { link_token: LINK_TOKEN }; }
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
 
@@ -147,7 +156,7 @@ function wirePlate(slot){
     const f = e.target.files && e.target.files[0]; if(!f) return;
     const ph = $("ph-"+slot); ph.innerHTML = `<div class="spin"></div><div style="margin-top:8px">Reading plate…</div>`;
     let dataUrl; try{ dataUrl = await fileToScaledDataUrl(f); }catch(_){ ph.innerHTML = `<div class="ic">📷</div><div>Try again</div>`; return; }
-    const res = await api({ action:"read", link_token:TOKEN, image_b64:dataUrl, slot });
+    const res = await api({ action:"read", ...auth(), image_b64:dataUrl, slot });
     if(!res || !res.ok){ ph.innerHTML = `<div class="ic">⚠️</div><div>Upload failed — retry</div>`; return; }
     cap[slot].photo = res.photo_url; cap[slot].model = res.model||""; cap[slot].serial = res.serial||"";
     ph.innerHTML = `<img src="${esc(res.photo_url)}"/>`;
@@ -165,7 +174,7 @@ function refreshPill(slot){ const d=cap[slot].model&&cap[slot].serial; const p=$
 async function onExtra(e){
   const f = e.target.files && e.target.files[0]; if(!f) return;
   let dataUrl; try{ dataUrl = await fileToScaledDataUrl(f); }catch(_){ return; }
-  const res = await api({ action:"read", link_token:TOKEN, image_b64:dataUrl, slot:"extra" });
+  const res = await api({ action:"read", ...auth(), image_b64:dataUrl, slot:"extra" });
   if(res && res.ok && res.photo_url){ cap.extra_photos.push(res.photo_url); const g=$("extra-grid"); const im=document.createElement("img"); im.src=res.photo_url; g.appendChild(im); }
   e.target.value="";
 }
@@ -182,7 +191,7 @@ function updateHint(){
 
 async function submit(){
   const btn=$("submit"); btn.disabled=true; btn.textContent="Submitting…";
-  const res = await api({ action:"submit", link_token:TOKEN,
+  const res = await api({ action:"submit", ...auth(),
     outdoor:cap.outdoor, indoor:cap.indoor, furnace:cap.furnace,
     system_age:cap.system_age, operational:cap.operational, hp_type:cap.hp_type, extra_photos:cap.extra_photos });
   if(!res || !res.ok){ btn.disabled=false; btn.textContent="Submit capture"; alert("Submit failed — check signal and try again."); return; }
@@ -190,15 +199,17 @@ async function submit(){
     <div class="big">${res.complete?"✅":"📤"}</div>
     <h1 style="margin:10px 0 6px">${res.complete?"Captured — $100 bonus!":"Submitted"}</h1>
     <div class="muted">${res.complete?"All old-equipment info is in. Nice work.":"Got it, but some old-equipment info was missing. The office may follow up."}</div>
-    <div class="muted" style="margin-top:18px;font-size:13px">You can close this page.</div>
+    <div style="margin-top:18px">${STAFF_MODE ? `<a class="btn" href="../cs-installer/" style="display:inline-block;width:auto;padding:13px 22px;text-decoration:none">&#8592; Back to my jobs</a>` : `<div class="muted" style="font-size:13px">You can close this page.</div>`}</div>
   </div>`;
   window.scrollTo(0,0);
 }
 
 (async function init(){
-  if(!TOKEN){ $("app").innerHTML = `<div class="center"><div class="big">🔗</div><h1>Missing link code</h1><div class="muted">Open the link from your text message.</div></div>`; return; }
-  const res = await api({ action:"get", link_token:TOKEN });
-  if(!res || !res.ok){ $("app").innerHTML = `<div class="center"><div class="big">⚠️</div><h1>Link not valid</h1><div class="muted">${esc((res&&res.error)||"This capture link is invalid or expired. Ask the office for a new one.")}</div></div>`; return; }
+  if(!LINK_TOKEN && !STAFF_MODE){ $("app").innerHTML = `<div class="center"><div class="big">🔗</div><h1>Missing link code</h1><div class="muted">Open the link from your text message, or open this from the installer app.</div></div>`; return; }
+  if(STAFF_MODE && !STAFF_TOKEN){ $("app").innerHTML = `<div class="center"><div class="big">🔒</div><h1>Please sign in</h1><div class="muted">Open this from the installer app so you're signed in.</div><div style="margin-top:14px"><a class="btn" href="../cs-installer/" style="display:inline-block;width:auto;padding:12px 20px;text-decoration:none">Go to my jobs</a></div></div>`; return; }
+  if(STAFF_MODE){ await api({ action:"start", ...auth() }); }   // ensure the capture row exists for this job
+  const res = await api({ action:"get", ...auth() });
+  if(!res || !res.ok){ $("app").innerHTML = `<div class="center"><div class="big">⚠️</div><h1>Couldn't open this capture</h1><div class="muted">${esc((res&&res.error)||"Invalid or expired. Ask the office, or reopen from the installer app.")}</div></div>`; return; }
   // preload any already-submitted values
   const c = res.capture || {};
   cap.outdoor = {model:c.old_outdoor_model||"",serial:c.old_outdoor_serial||"",photo:c.old_outdoor_photo||""};
